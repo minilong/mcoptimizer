@@ -1,0 +1,18 @@
+[
+  {
+    "store_code": "SAMPLE001",
+    "be_code": "SAMPLE-BE-001",
+    "name": "麦当劳(演示门店·人民广场店)",
+    "address": "上海市黄浦区演示路 100 号",
+    "distance_m": 350,
+    "supports_delivery": true
+  },
+  {
+    "store_code": "SAMPLE002",
+    "be_code": "SAMPLE-BE-002",
+    "name": "麦当劳(演示门店·世纪大道店)",
+    "address": "上海市浦东新区演示路 200 号",
+    "distance_m": 1200,
+    "supports_delivery": true
+  }
+]

@@ -1,0 +1,4 @@
+[
+  {"promo_id": "PROMO-39-6", "title": "满39减6", "threshold_cents": 3900, "off_cents": 600, "stackable_with_coupon": false},
+  {"promo_id": "PROMO-59-10", "title": "满59减10", "threshold_cents": 5900, "off_cents": 1000, "stackable_with_coupon": false}
+]

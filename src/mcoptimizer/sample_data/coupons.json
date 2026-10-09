@@ -1,0 +1,7 @@
+[
+  {"coupon_id": "CPN-BIGMAC-199", "title": "巨无霸特价券 ¥19.9", "kind": "discount_item", "item_id": "bigmac", "special_price_cents": 1990},
+  {"coupon_id": "CPN-FRIES-99", "title": "中薯条特价券 ¥9.9", "kind": "discount_item", "item_id": "fries_m", "special_price_cents": 990},
+  {"coupon_id": "CPN-CONE-FREE", "title": "圆筒冰淇淋免费券", "kind": "free_item", "item_id": "sundae_cone"},
+  {"coupon_id": "CPN-30-5", "title": "满30减5券", "kind": "threshold_off", "threshold_cents": 3000, "off_cents": 500},
+  {"coupon_id": "CPN-50-10OFF", "title": "满50享9折券", "kind": "discount_rate", "threshold_cents": 5000, "rate": 0.9}
+]
