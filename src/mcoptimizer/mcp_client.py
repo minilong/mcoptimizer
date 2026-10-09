@@ -16,7 +16,11 @@ import json
 from typing import Any
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+
+try:  # mcp SDK >= 2.0
+    from mcp.client.streamable_http import streamable_http_client as _http_client
+except ImportError:  # mcp SDK 1.x
+    from mcp.client.streamable_http import streamablehttp_client as _http_client
 
 DEFAULT_TIMEOUT = 30.0
 
@@ -48,8 +52,15 @@ class McdMcpClient:
 
     async def __aenter__(self) -> McdMcpClient:
         headers = {"Authorization": f"Bearer {self.token}"}
-        self._stack = streamablehttp_client(self.url, headers=headers, timeout=self.timeout)
-        read, write, _ = await self._stack.__aenter__()
+        try:  # mcp SDK >= 2.0: pass a pre-configured httpx2.AsyncClient
+            import httpx2
+
+            http_client = httpx2.AsyncClient(headers=headers, timeout=self.timeout)
+            self._stack = _http_client(self.url, http_client=http_client)
+        except ImportError:  # mcp SDK 1.x: headers kwarg
+            self._stack = _http_client(self.url, headers=headers, timeout=self.timeout)
+        streams = await self._stack.__aenter__()
+        read, write = streams[0], streams[1]
         self._session = ClientSession(read, write)
         await self._session.__aenter__()
         await self._session.initialize()
@@ -58,10 +69,18 @@ class McdMcpClient:
         return self
 
     async def __aexit__(self, *exc) -> None:
-        if self._session is not None:
-            await self._session.__aexit__(*exc)
-        if self._stack is not None:
-            await self._stack.__aexit__(*exc)
+        # SDK task-group teardown is fragile across error paths; never let
+        # cleanup errors mask the real exception.
+        try:
+            if self._session is not None:
+                await self._session.__aexit__(*exc)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._stack is not None:
+                await self._stack.__aexit__(*exc)
+        except Exception:  # noqa: BLE001
+            pass
 
     def missing_required_tools(self) -> set[str]:
         return REQUIRED_TOOLS - self.available_tools
@@ -69,7 +88,10 @@ class McdMcpClient:
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
         assert self._session is not None, "client not connected"
         result = await self._session.call_tool(tool, args)
-        if result.isError:
+        is_error = getattr(result, "isError", None)
+        if is_error is None:
+            is_error = getattr(result, "is_error", False)
+        if is_error:
             message = " ".join(getattr(c, "text", "") for c in result.content) or "unknown error"
             raise McpToolError(tool, message.strip())
         text = next(
@@ -81,7 +103,27 @@ class McdMcpClient:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            return {"_raw_text": text}
+            pass
+        # mcd-mcp wraps payloads in instruction text that may itself contain
+        # template braces like {data[].title}. Try every '{' position with
+        # raw_decode and prefer the dict that looks like an API envelope.
+        decoder = json.JSONDecoder()
+        fallback: Any = None
+        for start in (i for i, ch in enumerate(text) if ch == "{"):
+            try:
+                payload, _ = decoder.raw_decode(text[start:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                if "success" in payload or "data" in payload:
+                    return payload
+                if fallback is None:
+                    fallback = payload
+                elif isinstance(payload.get("data"), (list, dict)):
+                    return payload
+        if fallback is not None:
+            return fallback
+        return {"_raw_text": text}
 
 
 def call_tool_sync(url: str, token: str, calls: list[tuple[str, dict[str, Any]]]) -> list[Any]:

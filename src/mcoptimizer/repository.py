@@ -47,6 +47,8 @@ class Repository:
         be_code: str | None = None,
         order_type: int = 1,
         be_type: int = 1,
+        city: str = "上海",
+        keyword: str = "",
     ) -> MenuData:
         if self.settings.demo:
             stores = [Store.model_validate(d) for d in _load_sample("stores.json")]
@@ -66,6 +68,8 @@ class Repository:
             be_code=be_code,
             order_type=order_type,
             be_type=be_type,
+            city=city,
+            keyword=keyword,
         )
 
     def verify_price(self, result_lines: list[dict], **ctx) -> dict | None:

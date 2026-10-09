@@ -69,6 +69,118 @@ def _unwrap_list(payload: Any, *keys: str) -> list[dict]:
     return []
 
 
+def parse_nutrition_text(payload: Any) -> dict[str, Nutrition]:
+    """list-nutrition-foods returns data as a CSV-ish *string*:
+    "[160]{productName,nutritionDescription,energyKj,energyKcal,protein,fat,...}:"
+    followed by rows. Keyed by product NAME (not code)."""
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if not isinstance(data, str):
+        return {}
+    result: dict[str, Nutrition] = {}
+    for line in data.splitlines():
+        line = line.strip()
+        if not line or line.startswith("[") or "," not in line:
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 9 or parts[0] == "productName":
+            continue
+        name = parts[0]
+
+        def num(idx: int, parts: list[str] = parts) -> float:
+            try:
+                return float(parts[idx])
+            except (ValueError, IndexError):
+                return 0.0
+
+        try:
+            sodium: float | None = float(parts[7])
+        except (ValueError, IndexError):
+            sodium = None
+        result[name] = Nutrition(
+            protein_g=num(4),
+            calories_kcal=num(3),
+            fat_g=num(5),
+            carbs_g=num(6),
+            sodium_mg=sodium,
+        )
+    return result
+
+
+def parse_menu(payload: Any, nutrition_by_name: dict[str, Nutrition]) -> list[MenuItem]:
+    """query-meals: data.categories[].meals[].code + data.meals{code: detail}."""
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    details = data.get("meals") or {}
+    if not isinstance(details, dict):
+        return []
+
+    category_of: dict[str, str] = {}
+    for cat in data.get("categories") or []:
+        cat_name = cat.get("name") or ""
+        for m in cat.get("meals") or []:
+            code = m.get("code")
+            if code:
+                category_of[str(code)] = cat_name
+
+    items: list[MenuItem] = []
+    for code, d in details.items():
+        if not isinstance(d, dict):
+            continue
+        name = str(_first_key(d, "name", "productName") or code)
+        price = _to_cents(_first_key(d, "currentPrice", "price", "originalPrice"))
+        if price <= 0:
+            continue
+        nutrition = nutrition_by_name.get(name)
+        if nutrition is None:  # loose match: nutrition name is prefix of menu name
+            for n_name, n in nutrition_by_name.items():
+                if name.startswith(n_name) or n_name.startswith(name):
+                    nutrition = n
+                    break
+        tags = d.get("tags") or []
+        items.append(
+            MenuItem(
+                item_id=str(code),
+                name=name,
+                price_cents=price,
+                category=category_of.get(str(code)),
+                nutrition=nutrition,
+                is_combo=any("套餐" in str(t) for t in tags),
+            )
+        )
+    return items
+
+
+def normalize_coupon(d: dict) -> Coupon | None:
+    """query-store-coupons entries: {title, couponId, couponCode, tradeDateTime,
+    products: [{productCode, productName}], promotionId}.
+
+    任选/兑换类券一律建模为 free_item（作用于首个关联商品）；无关联商品的
+    券目前无法可靠推断规则，跳过并在文档中声明。"""
+    products = d.get("products") or []
+    if not products:
+        return None
+    first = products[0] if isinstance(products[0], dict) else {}
+    item_id = first.get("productCode")
+    if not item_id:
+        return None
+    valid_until = None
+    trade = d.get("tradeDateTime")
+    if isinstance(trade, str) and "-" in trade:
+        valid_until = trade.rsplit("-", 1)[-1].strip()
+    return Coupon(
+        coupon_id=str(d.get("couponId") or d.get("couponCode") or ""),
+        title=str(d.get("title") or ""),
+        kind="free_item",
+        item_id=str(item_id),
+        valid_until=valid_until,
+    )
+
+
 def normalize_store(d: dict) -> Store:
     return Store(
         store_code=str(_first_key(d, "storeCode", "store_code", "code") or ""),
@@ -81,44 +193,15 @@ def normalize_store(d: dict) -> Store:
 
 
 def normalize_item(d: dict, nutrition_map: dict[str, Nutrition]) -> MenuItem:
+    """Generic single-item normalization (kept for future shapes)."""
     item_id = str(_first_key(d, "productCode", "code", "itemId", "id") or "")
     return MenuItem(
         item_id=item_id,
         name=str(_first_key(d, "productName", "name", "product_name") or item_id),
-        price_cents=_to_cents(_first_key(d, "price", "priceCents", "salePrice")),
+        price_cents=_to_cents(_first_key(d, "price", "priceCents", "salePrice", "currentPrice")),
         category=_first_key(d, "categoryName", "category", "type"),
         nutrition=nutrition_map.get(item_id),
         is_combo=bool(_first_key(d, "isCombo", "is_combo", "combo") or False),
-    )
-
-
-def normalize_coupon(d: dict) -> Coupon | None:
-    kind_raw = str(_first_key(d, "couponType", "kind", "type") or "").lower()
-    kind_map = {
-        "free_item": "free_item",
-        "free": "free_item",
-        "discount_item": "discount_item",
-        "special": "discount_item",
-        "threshold_off": "threshold_off",
-        "cash": "threshold_off",
-        "discount_rate": "discount_rate",
-        "rate": "discount_rate",
-        "discount": "discount_rate",
-    }
-    kind = kind_map.get(kind_raw)
-    if kind is None:
-        return None
-    return Coupon(
-        coupon_id=str(_first_key(d, "couponId", "id", "coupon_id") or ""),
-        title=str(_first_key(d, "title", "couponName", "name") or ""),
-        kind=kind,  # type: ignore[arg-type]
-        item_id=_first_key(d, "productCode", "itemId", "item_id"),
-        special_price_cents=_to_cents(_first_key(d, "specialPrice", "specialPriceCents")),
-        threshold_cents=_to_cents(_first_key(d, "threshold", "thresholdCents", "minSpend")),
-        off_cents=_to_cents(_first_key(d, "off", "offCents", "reduceAmount")),
-        rate=_first_key(d, "rate", "discountRate"),
-        stackable=bool(_first_key(d, "stackable", "canStack") or False),
-        valid_until=_first_key(d, "validUntil", "endTime", "expireTime"),
     )
 
 
@@ -166,15 +249,18 @@ class _Caller:
         raise RuntimeError(f"mcd-mcp '{tool}' 调用失败：{last_err}") from last_err
 
 
-async def _fetch_stores_async(settings: Settings, lat: float, lon: float) -> list[Store]:
+async def _fetch_stores_async(settings: Settings, city: str, keyword: str) -> list[Store]:
     async with _Caller(settings) as caller:
-        payload = await caller.call("query-nearby-stores", {"latitude": lat, "longitude": lon})
+        payload = await caller.call(
+            "query-nearby-stores",
+            {"beType": 1, "searchType": 2, "city": city, "keyword": keyword},
+        )
     rows = _unwrap_list(payload)
     return [normalize_store(d) for d in rows]
 
 
-def fetch_stores(settings: Settings, lat: float = 31.2304, lon: float = 121.4737) -> list[Store]:
-    return asyncio.run(_fetch_stores_async(settings, lat, lon))
+def fetch_stores(settings: Settings, city: str = "上海", keyword: str = "") -> list[Store]:
+    return asyncio.run(_fetch_stores_async(settings, city, keyword))
 
 
 async def _fetch_menu_data_async(
@@ -184,12 +270,15 @@ async def _fetch_menu_data_async(
     order_type: int,
     be_type: int,
     refresh: bool = False,
+    city: str = "上海",
+    keyword: str = "",
 ) -> MenuData:
     async with _Caller(settings, refresh=refresh) as caller:
         store: Store | None = None
         if store_code is None:
             stores_payload = await caller.call(
-                "query-nearby-stores", {"latitude": 31.2304, "longitude": 121.4737}
+                "query-nearby-stores",
+                {"beType": 1, "searchType": 2, "city": city, "keyword": keyword},
             )
             stores = [normalize_store(d) for d in _unwrap_list(stores_payload)]
             if not stores:
@@ -208,24 +297,15 @@ async def _fetch_menu_data_async(
         coupons_payload = await caller.call("query-store-coupons", args)
         nutrition_payload = await caller.call("list-nutrition-foods", {})
 
-    nutrition_map: dict[str, Nutrition] = {}
-    for d in _unwrap_list(nutrition_payload):
-        iid = str(_first_key(d, "productCode", "code", "itemId", "id") or "")
-        if not iid:
-            continue
-        nutrition_map[iid] = Nutrition(
-            protein_g=float(_first_key(d, "protein", "proteinG", "protein_g") or 0),
-            calories_kcal=float(_first_key(d, "calories", "kcal", "caloriesKcal") or 0),
-            fat_g=float(_first_key(d, "fat", "fatG", "fat_g") or 0),
-            carbs_g=float(_first_key(d, "carbs", "carbsG", "carbohydrate") or 0),
-            sodium_mg=_first_key(d, "sodium", "sodiumMg"),
-        )
-
-    items = [
-        normalize_item(d, nutrition_map)
-        for d in _unwrap_list(menu_payload, "data", "list", "items", "meals")
-    ]
-    items = [i for i in items if i.item_id and i.price_cents > 0]
+    nutrition_by_name = parse_nutrition_text(nutrition_payload)
+    items = parse_menu(menu_payload, nutrition_by_name)
+    # fallback for envelope shapes the dedicated parser doesn't know
+    if not items:
+        items = [
+            normalize_item(d, {})
+            for d in _unwrap_list(menu_payload, "data", "list", "items", "meals")
+        ]
+        items = [i for i in items if i.item_id and i.price_cents > 0]
 
     coupons = []
     for d in _unwrap_list(coupons_payload):
@@ -242,17 +322,25 @@ def fetch_menu_data(
     be_code: str | None = None,
     order_type: int = 1,
     be_type: int = 1,
+    city: str = "上海",
+    keyword: str = "",
 ) -> MenuData:
-    return asyncio.run(_fetch_menu_data_async(settings, store_code, be_code, order_type, be_type))
+    return asyncio.run(
+        _fetch_menu_data_async(
+            settings, store_code, be_code, order_type, be_type, city=city, keyword=keyword
+        )
+    )
 
 
 def fetch_and_cache(
-    settings: Settings, lat: float, lon: float, delivery: bool, refresh: bool
+    settings: Settings, city: str, keyword: str, delivery: bool, refresh: bool
 ) -> str:
     order_type = 2 if delivery else 1
     be_type = 2 if delivery else 1
     data = asyncio.run(
-        _fetch_menu_data_async(settings, None, None, order_type, be_type, refresh=refresh)
+        _fetch_menu_data_async(
+            settings, None, None, order_type, be_type, refresh=refresh, city=city, keyword=keyword
+        )
     )
     store_label = f"{data.store.name} ({data.store.store_code})" if data.store else "?"
     lines = [

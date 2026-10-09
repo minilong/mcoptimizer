@@ -40,9 +40,9 @@ export MCD_MCP_TOKEN=你的token        # Windows: setx MCD_MCP_TOKEN 你的toke
 3. 拉取附近门店真实数据并求解：
 
 ```bash
-mcoptimizer fetch --lat 31.2304 --lon 121.4737   # 拉门店/菜单/券/营养到本地缓存
-mcoptimizer budget 30 --people 2
-mcoptimizer coupon --items "巨无霸x1,中薯条x2,可口可乐(中)x2"
+mcoptimizer fetch --city 上海 --keyword 人民广场   # 拉门店/菜单/券/营养到本地缓存
+mcoptimizer budget 30 --people 2 --keyword 人民广场
+mcoptimizer coupon --items "经典麦旋风x1,巨无霸x1" --keyword 人民广场
 ```
 
 本地估算的方案可经 mcd-mcp `calculate-price` 权威验价，最终以门店实际结算为准。

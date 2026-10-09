@@ -67,8 +67,8 @@ def version() -> None:
 
 @app.command()
 def fetch(
-    lat: float = typer.Option(31.2304, help="纬度"),
-    lon: float = typer.Option(121.4737, help="经度"),
+    city: str = typer.Option("上海", "--city", help="城市名"),
+    keyword: str = typer.Option("", "--keyword", "-k", help="门店关键词（如商圈名）"),
     delivery: bool = typer.Option(False, "--delivery", help="外送场景"),
     refresh: bool = typer.Option(False, "--refresh", help="绕过缓存强制拉取"),
 ) -> None:
@@ -77,7 +77,11 @@ def fetch(
     from . import mcp_adapter
 
     summary = mcp_adapter.fetch_and_cache(
-        load_settings(demo=False), lat=lat, lon=lon, delivery=delivery, refresh=refresh
+        load_settings(demo=False),
+        city=city,
+        keyword=keyword,
+        delivery=delivery,
+        refresh=refresh,
     )
     console.print(summary)
 
@@ -93,10 +97,12 @@ def budget(
     demo: bool = typer.Option(False, "--demo", help="使用内置示例数据"),
     md: bool = typer.Option(False, "--md", help="输出 Markdown（便于分享）"),
     store: str | None = typer.Option(None, "--store", help="门店编码（真实模式）"),
+    city: str = typer.Option("上海", "--city", help="城市名（真实模式）"),
+    keyword: str = typer.Option("", "--keyword", help="门店关键词（真实模式）"),
 ) -> None:
     """预算内效用最大化：给定预算和人数，求最优搭配。"""
     repo = _repo(demo)
-    data = repo.load_menu(store_code=store)
+    data = repo.load_menu(store_code=store, city=city, keyword=keyword)
     _print_source(data.source)
 
     budget_cents = round(amount * 100)
@@ -132,6 +138,8 @@ def nutrition(
     demo: bool = typer.Option(False, "--demo", help="使用内置示例数据"),
     md: bool = typer.Option(False, "--md", help="输出 Markdown"),
     store: str | None = typer.Option(None, "--store", help="门店编码（真实模式）"),
+    city: str = typer.Option("上海", "--city", help="城市名（真实模式）"),
+    keyword: str = typer.Option("", "--keyword", help="门店关键词（真实模式）"),
 ) -> None:
     """营养约束下费用最小（ILP，PuLP/CBC 求解）。"""
     try:
@@ -141,7 +149,7 @@ def nutrition(
         raise typer.Exit(code=2) from None
 
     repo = _repo(demo)
-    data = repo.load_menu(store_code=store)
+    data = repo.load_menu(store_code=store, city=city, keyword=keyword)
     _print_source(data.source)
 
     results, warnings = solve_nutrition(
@@ -180,10 +188,12 @@ def coupon(
     demo: bool = typer.Option(False, "--demo", help="使用内置示例数据"),
     md: bool = typer.Option(False, "--md", help="输出 Markdown"),
     store: str | None = typer.Option(None, "--store", help="门店编码（真实模式）"),
+    city: str = typer.Option("上海", "--city", help="城市名（真实模式）"),
+    keyword: str = typer.Option("", "--keyword", help="门店关键词（真实模式）"),
 ) -> None:
     """心愿单的最优用券方案（DFS + 分支限界）。"""
     repo = _repo(demo)
-    data = repo.load_menu(store_code=store)
+    data = repo.load_menu(store_code=store, city=city, keyword=keyword)
     _print_source(data.source)
 
     by_name = {i.name: i for i in data.items}
@@ -230,6 +240,8 @@ def ladder(
     fmt: str = typer.Option("table", "--format", "-f", help="table / md"),
     demo: bool = typer.Option(False, "--demo", help="使用内置示例数据"),
     store: str | None = typer.Option(None, "--store", help="门店编码（真实模式）"),
+    city: str = typer.Option("上海", "--city", help="城市名（真实模式）"),
+    keyword: str = typer.Option("", "--keyword", help="门店关键词（真实模式）"),
 ) -> None:
     """性价比天梯：按每元蛋白质/热量对菜单排序。"""
     if metric not in METRIC_LABELS:
@@ -237,7 +249,7 @@ def ladder(
         raise typer.Exit(code=2)
 
     repo = _repo(demo)
-    data = repo.load_menu(store_code=store)
+    data = repo.load_menu(store_code=store, city=city, keyword=keyword)
     _print_source(data.source)
 
     rows = rank_items(data.items, metric, top=top)  # type: ignore[arg-type]

@@ -36,8 +36,9 @@ class Cache:
     def _path(self, tool: str, args: dict[str, Any]) -> Path:
         canonical = json.dumps(args, sort_keys=True, ensure_ascii=False)
         digest = hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
-        safe_tool = tool.replace("/", "_")
-        return self.root / f"{safe_tool}:{digest}.json"
+        safe_tool = tool.replace("/", "_").replace(":", "_")
+        # ':' is illegal in Windows filenames; use '__' as separator
+        return self.root / f"{safe_tool}__{digest}.json"
 
     def get(self, tool: str, args: dict[str, Any]) -> Any | None:
         if not self.enabled:
